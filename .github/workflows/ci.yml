@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - run: dotnet restore NexusPay.sln
+      - run: dotnet build NexusPay.sln --configuration Release --no-restore
+      - name: Generate ephemeral credentials and SQL Server password
+        run: |
+          SQL_PASS="$(openssl rand -hex 24)Aa1!"
+          echo "::add-mask::$SQL_PASS"
+          echo "NEXUSPAY_TEST_SQL_PASSWORD=$SQL_PASS" >> "$GITHUB_ENV"
+          echo "NEXUSPAY_TEST_CONNECTION_STRING=Server=localhost,1433;Database=NexusPay_IntegrationTests;User Id=sa;Password=$SQL_PASS;Encrypt=False;TrustServerCertificate=True" >> "$GITHUB_ENV"
+          echo "NEXUSPAY_TEST_ADMIN_EMAIL=ci-admin@nexuspay.local" >> "$GITHUB_ENV"
+          echo "BootstrapAdmin__Email=ci-admin@nexuspay.local" >> "$GITHUB_ENV"
+          ADMIN_PASS="$(openssl rand -hex 24)Aa1!"
+          echo "::add-mask::$ADMIN_PASS"
+          echo "NEXUSPAY_TEST_ADMIN_PASSWORD=$ADMIN_PASS" >> "$GITHUB_ENV"
+          echo "BootstrapAdmin__Password=$ADMIN_PASS" >> "$GITHUB_ENV"
+          JWT_KEY="$(openssl rand -base64 48)"
+          echo "::add-mask::$JWT_KEY"
+          echo "Jwt__SigningKey=$JWT_KEY" >> "$GITHUB_ENV"
+      - name: Start isolated SQL Server 2022 for integration tests
+        run: |
+          docker run --detach --name nexuspay-ci-sql --publish 1433:1433 \
+            --env ACCEPT_EULA=Y --env MSSQL_PID=Developer \
+            --env MSSQL_SA_PASSWORD="$NEXUSPAY_TEST_SQL_PASSWORD" \
+            mcr.microsoft.com/mssql/server:2022-latest
+          for attempt in $(seq 1 45); do
+            if docker exec nexuspay-ci-sql /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa \
+              -P "$NEXUSPAY_TEST_SQL_PASSWORD" -C -Q 'SELECT 1' >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs nexuspay-ci-sql
+          exit 1
+      - name: Run unit and SQL Server integration tests
+        run: dotnet test NexusPay.sln --configuration Release --no-build --verbosity normal --logger "trx;LogFileName=nexuspay-tests.trx" --results-directory TestResults
+      - name: Upload backend test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-test-results
+          path: TestResults/**/*.trx
+          if-no-files-found: ignore
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend/nexuspay-web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/nexuspay-web/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build

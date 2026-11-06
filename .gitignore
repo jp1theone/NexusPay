@@ -1,0 +1,38 @@
+# .NET
+**/bin/
+**/obj/
+**/TestResults/
+**/coverage/
+*.user
+*.suo
+*.cache
+.vs/
+.idea/
+
+# Node / frontend
+**/node_modules/
+**/dist/
+**/.vite/
+**/coverage/
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# Secrets and local environment
+.env
+.env.local
+.env.*.local
+!.env.example
+secrets.json
+*.pfx
+*.p12
+*.key
+*.pem
+
+# Logs and temporary files
+*.log
+*.tmp
+*.bak
+Thumbs.db
+.DS_Store
+
